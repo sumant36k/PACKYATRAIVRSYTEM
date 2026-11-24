@@ -1,0 +1,6 @@
+{
+  "name": "Asterisk + FastAPI IVR Telephony Studio",
+  "description": "Production-grade visual IVR call flow builder, Asterisk ARI orchestrator, dynamic TTS engine, SIP trunk manager, and live softphone simulator.",
+  "requestFramePermissions": ["microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
