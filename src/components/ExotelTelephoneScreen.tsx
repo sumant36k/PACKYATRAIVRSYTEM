@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ArrowRight,
   Check,
@@ -25,6 +25,9 @@ interface ExotelTelephoneScreenProps {
   status: ExotelStatus | null;
   calls: ExotelCallRecord[];
   routes: IvrRouteEntry[];
+  authToken: string | null;
+  dialTargetOverride?: { number: string; nonce: number } | null;
+  onUnauthorized: () => void;
   onUpdateRoutes: (routes: IvrRouteEntry[]) => void;
   onCallPlaced: () => void;
   onPlayRecording: (call: ExotelCallRecord) => void;
@@ -50,6 +53,9 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
   status,
   calls,
   routes,
+  authToken,
+  dialTargetOverride,
+  onUnauthorized,
   onUpdateRoutes,
   onCallPlaced,
   onPlayRecording,
@@ -59,6 +65,20 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
   const [agentPhone, setAgentPhone] = useState(routes[0]?.phone || '+919916109192');
   const [targetNumber, setTargetNumber] = useState(routes[1]?.phone || '+919199225154');
   const [flowAppId, setFlowAppId] = useState(status?.flow_app_id || '1386346');
+
+  useEffect(() => {
+    if (status?.flow_app_id) {
+      setFlowAppId(status.flow_app_id);
+    }
+  }, [status?.flow_app_id]);
+
+  useEffect(() => {
+    if (dialTargetOverride?.number) {
+      setDialMode('bridge');
+      setTargetNumber(dialTargetOverride.number);
+      setFeedback(null);
+    }
+  }, [dialTargetOverride]);
 
   const [submitting, setSubmitting] = useState(false);
   const [feedback, setFeedback] = useState<{
@@ -101,6 +121,11 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
       return;
     }
 
+    if (mode === 'bridge' && !agentPhone.trim()) {
+      setFeedback({ type: 'error', text: 'Enter an Agent Mobile number to answer first.' });
+      return;
+    }
+
     setSubmitting(true);
     setFeedback(null);
 
@@ -121,9 +146,16 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
 
       const res = await fetch(endpoint, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
         body: JSON.stringify(payload),
       });
+      if (res.status === 401) {
+        onUnauthorized();
+        return;
+      }
       const data = await res.json().catch(() => ({}));
 
       if (!res.ok) {
@@ -134,7 +166,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
       } else {
         setFeedback({
           type: 'success',
-          text: data?.message || 'Call initiated via Exotel.',
+          text: data?.message || 'Call initiated.',
           callSid: data?.call_sid,
         });
         setTimeout(() => {
@@ -144,7 +176,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
     } catch (err) {
       setFeedback({
         type: 'error',
-        text: err instanceof Error ? err.message : 'Unable to reach Exotel proxy server.',
+        text: err instanceof Error ? err.message : 'Unable to reach voice proxy server.',
       });
     } finally {
       setSubmitting(false);
@@ -169,7 +201,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
       <section className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-6">
         <div className="flex items-center justify-between gap-3 mb-5">
           <div>
-            <h2 className="text-base font-semibold text-slate-900">Exotel Telephone</h2>
+            <h2 className="text-base font-semibold text-slate-900">Telephone Dialer</h2>
             <p className="text-xs text-slate-500 mt-0.5">
               Caller ID <span className="font-mono tabular-nums text-slate-700">{exoPhone}</span>
             </p>
@@ -212,7 +244,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
           <div className="mb-4">
             <label
               htmlFor="agent-phone-input"
-              className="block text-xs font-medium text-slate-600 mb-1.5"
+              className="block text-xs font-medium text-slate-700 mb-1.5"
             >
               Agent Mobile (Answers First)
             </label>
@@ -222,7 +254,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
               value={agentPhone}
               onChange={(e) => setAgentPhone(e.target.value)}
               placeholder="+919916109192"
-              className="w-full px-3.5 py-2.5 text-sm font-mono tabular-nums text-slate-900 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-600/20 focus:border-teal-600"
+              className="w-full px-3.5 py-2.5 text-sm font-mono tabular-nums text-slate-900 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-700"
             />
             <div className="flex flex-wrap gap-1.5 mt-2">
               {routes.map((route) => {
@@ -234,7 +266,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
                     onClick={() => setAgentPhone(route.phone)}
                     className={`px-2.5 py-1 text-xs font-medium rounded-md border transition-colors whitespace-nowrap shrink-0 ${
                       isSelected
-                        ? 'bg-teal-50 border-teal-200 text-teal-800'
+                        ? 'bg-blue-50 border-blue-200 text-blue-700'
                         : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-50'
                     }`}
                   >
@@ -248,9 +280,9 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
           <div className="mb-4">
             <label
               htmlFor="flow-app-id-input"
-              className="block text-xs font-medium text-slate-600 mb-1.5"
+              className="block text-xs font-medium text-slate-700 mb-1.5"
             >
-              Exotel App Bazaar Flow ID
+              IVR Flow ID
             </label>
             <input
               id="flow-app-id-input"
@@ -258,7 +290,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
               value={flowAppId}
               onChange={(e) => setFlowAppId(e.target.value)}
               placeholder="1386346"
-              className="w-full px-3.5 py-2.5 text-sm font-mono tabular-nums text-slate-900 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-600/20 focus:border-teal-600"
+              className="w-full px-3.5 py-2.5 text-sm font-mono tabular-nums text-slate-900 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-700"
             />
           </div>
         )}
@@ -268,7 +300,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
           <div className="flex items-center justify-between mb-1.5">
             <label
               htmlFor="target-phone-input"
-              className="text-xs font-medium text-slate-600"
+              className="text-xs font-medium text-slate-700"
             >
               {dialMode === 'bridge' ? 'Customer / Target Number' : 'Phone Number to Receive IVR'}
             </label>
@@ -289,7 +321,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
               value={targetNumber}
               onChange={(e) => setTargetNumber(e.target.value)}
               placeholder="+91 91992 25154"
-              className="w-full pl-4 pr-11 py-3 text-xl font-semibold font-mono tabular-nums tracking-tight text-slate-900 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-600/20 focus:border-teal-600"
+              className="w-full pl-4 pr-11 py-3 text-xl font-semibold font-mono tabular-nums tracking-tight text-slate-900 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-700"
             />
             <button
               type="button"
@@ -309,7 +341,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
               key={item.digit}
               type="button"
               onClick={() => handleDigitPress(item.digit)}
-              className="h-13 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 active:bg-slate-100 flex flex-col items-center justify-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-teal-600"
+              className="h-13 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 active:bg-slate-100 flex flex-col items-center justify-center transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600"
             >
               <span className="text-lg font-semibold font-mono tabular-nums text-slate-900 leading-none">
                 {item.digit}
@@ -330,7 +362,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
           type="button"
           disabled={submitting || !status?.exotel_ready}
           onClick={() => triggerCall()}
-          className="w-full h-12 px-5 rounded-lg bg-teal-700 hover:bg-teal-800 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
+          className="w-full h-11 px-5 rounded-lg bg-blue-700 hover:bg-blue-800 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-sm font-semibold inline-flex items-center justify-center gap-2 transition-colors whitespace-nowrap"
         >
           {dialMode === 'bridge' ? (
             <PhoneCall className="w-4 h-4" />
@@ -338,7 +370,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
             <PhoneForwarded className="w-4 h-4" />
           )}
           {submitting
-            ? 'Connecting Exotel...'
+            ? 'Connecting Call...'
             : dialMode === 'bridge'
             ? 'Place 2-Way Call'
             : 'Send IVR Menu Call'}
@@ -346,7 +378,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
 
         {!status?.exotel_ready && (
           <p className="text-xs text-amber-700 mt-3">
-            Exotel API credentials are not configured yet. Add EXOTEL_ACCOUNT_SID, EXOTEL_API_KEY, and EXOTEL_API_TOKEN to your environment.
+            Voice telephony credentials are not configured yet in your environment.
           </p>
         )}
 
@@ -371,11 +403,11 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
 
       {/* Right Column: Active IVR Line, 3-Option Directory, and Recent Calls */}
       <div className="lg:col-span-7 flex flex-col gap-6">
-        {/* Inbound ExoPhone & IVR Flow Overview */}
+        {/* Inbound Virtual Number & IVR Flow Overview */}
         <section className="bg-white border border-slate-200 rounded-xl p-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-5 border-b border-slate-200">
             <div>
-              <div className="text-xs font-medium text-slate-500">Active Exotel Virtual Number</div>
+              <div className="text-xs font-medium text-slate-500">Active Virtual Number</div>
               <div className="text-2xl font-semibold font-mono tabular-nums tracking-tight text-slate-900 mt-1">
                 {exoPhone}
               </div>
@@ -410,7 +442,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
                 type="button"
                 disabled={submitting || !status?.exotel_ready}
                 onClick={() => triggerCall(agentPhone, 'ivr')}
-                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-teal-800 bg-teal-50 hover:bg-teal-100 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0"
               >
                 <Phone className="w-3.5 h-3.5" />
                 Test IVR on Owner
@@ -441,7 +473,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
                   <button
                     type="button"
                     onClick={handleSaveRoutes}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-teal-700 hover:bg-teal-800 rounded-lg transition-colors whitespace-nowrap"
+                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors whitespace-nowrap"
                   >
                     <Save className="w-3.5 h-3.5" />
                     Save
@@ -479,7 +511,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
                             next[idx] = { ...next[idx], label: e.target.value };
                             setDraftRoutes(next);
                           }}
-                          className="px-2.5 py-1.5 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-teal-600"
+                          className="px-2.5 py-1.5 text-sm border border-slate-200 rounded-md focus:outline-none focus:border-blue-700"
                           aria-label={`Press ${route.key} label`}
                         />
                         <input
@@ -490,7 +522,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
                             next[idx] = { ...next[idx], phone: e.target.value };
                             setDraftRoutes(next);
                           }}
-                          className="px-2.5 py-1.5 text-sm font-mono tabular-nums border border-slate-200 rounded-md focus:outline-none focus:border-teal-600"
+                          className="px-2.5 py-1.5 text-sm font-mono tabular-nums border border-slate-200 rounded-md focus:outline-none focus:border-blue-700"
                           aria-label={`Press ${route.key} phone number`}
                         />
                       </div>
@@ -525,7 +557,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
                           setTargetNumber(route.phone);
                           triggerCall(route.phone, 'bridge');
                         }}
-                        className="px-3 py-1.5 text-xs font-medium text-teal-800 bg-teal-50 hover:bg-teal-100 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0"
+                        className="px-3 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0"
                       >
                         Bridge Now
                       </button>
@@ -551,7 +583,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
         <section className="bg-white border border-slate-200 rounded-xl p-6">
           <div className="flex items-center justify-between gap-3 mb-4">
             <div>
-              <h3 className="text-sm font-semibold text-slate-900">Recent Exotel Calls</h3>
+              <h3 className="text-sm font-semibold text-slate-900">Recent Calls</h3>
               <p className="text-xs text-slate-500 mt-0.5">
                 Latest activity on {exoPhone}
               </p>
@@ -559,7 +591,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
             <button
               type="button"
               onClick={onOpenLogs}
-              className="inline-flex items-center gap-1 text-xs font-medium text-teal-700 hover:text-teal-900 transition-colors whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-1 text-xs font-medium text-blue-700 hover:text-blue-900 transition-colors whitespace-nowrap shrink-0"
             >
               View All Logs
               <ArrowRight className="w-3.5 h-3.5" />
@@ -568,7 +600,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
 
           {recentCalls.length === 0 ? (
             <div className="py-8 text-center text-xs text-slate-500 border-t border-slate-100">
-              No Exotel calls synced yet. Place a call using the dialer or dial {exoPhone}.
+              No calls synced yet. Place a call using the dialer or dial {exoPhone}.
             </div>
           ) : (
             <div className="divide-y divide-slate-100 border-t border-slate-100">
@@ -598,7 +630,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
                       <button
                         type="button"
                         onClick={() => onPlayRecording(call)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-teal-800 bg-teal-50 hover:bg-teal-100 rounded-md transition-colors whitespace-nowrap shrink-0"
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors whitespace-nowrap shrink-0"
                       >
                         <Play className="w-3 h-3" />
                         Listen

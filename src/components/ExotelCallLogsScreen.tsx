@@ -25,6 +25,8 @@ interface ExotelCallLogsScreenProps {
   loading: boolean;
   error: string | null;
   playingCallSid: string | null;
+  authToken: string | null;
+  onUnauthorized: () => void;
   onRefresh: () => void;
   onPlayRecording: (call: ExotelCallRecord) => void;
   onOpenDialer: () => void;
@@ -35,7 +37,7 @@ type LogFilter = 'all' | 'recorded' | 'inbound' | 'outbound';
 function statusTextClass(raw: string): string {
   const s = (raw || '').toLowerCase();
   if (s === 'completed') return 'text-emerald-700';
-  if (s === 'in-progress' || s === 'ringing' || s === 'queued') return 'text-teal-700';
+  if (s === 'in-progress' || s === 'ringing' || s === 'queued') return 'text-blue-700';
   if (s === 'busy' || s === 'no-answer' || s === 'canceled') return 'text-amber-700';
   if (s === 'failed') return 'text-red-700';
   return 'text-slate-600';
@@ -47,6 +49,8 @@ export const ExotelCallLogsScreen: React.FC<ExotelCallLogsScreenProps> = ({
   loading,
   error,
   playingCallSid,
+  authToken,
+  onUnauthorized,
   onRefresh,
   onPlayRecording,
   onOpenDialer,
@@ -110,9 +114,32 @@ export const ExotelCallLogsScreen: React.FC<ExotelCallLogsScreenProps> = ({
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `exotel_call_logs_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.download = `call_logs_${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  };
+
+  const handleDownloadRecording = async (call: ExotelCallRecord) => {
+    if (!authToken || !call.audioProxyUrl) return;
+    try {
+      const res = await fetch(`${call.audioProxyUrl}?download=1`, {
+        headers: { Authorization: `Bearer ${authToken}` },
+      });
+      if (res.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `call_${call.sid}.mp3`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      // Ignore download failure
+    }
   };
 
   return (
@@ -136,7 +163,7 @@ export const ExotelCallLogsScreen: React.FC<ExotelCallLogsScreenProps> = ({
         </div>
         <div className="p-5">
           <div className="text-xs font-medium text-slate-500">Recorded Audio Files</div>
-          <div className="text-2xl font-semibold font-mono tabular-nums text-teal-700 mt-1.5">
+          <div className="text-2xl font-semibold font-mono tabular-nums text-blue-700 mt-1.5">
             {metrics.recorded}
           </div>
         </div>
@@ -153,8 +180,8 @@ export const ExotelCallLogsScreen: React.FC<ExotelCallLogsScreenProps> = ({
         <div className="bg-amber-50/70 border border-amber-200 rounded-xl px-5 py-3.5 text-xs text-amber-900 flex items-start gap-3">
           <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
           <div>
-            <span className="font-semibold">No recordings returned by Exotel yet.</span>{' '}
-            Make sure &ldquo;Record&rdquo; is checked inside each Connect applet (Press 1, 2, 3) in your Exotel App Bazaar flow #{status?.flow_app_id || '1386346'} and click Save.
+            <span className="font-semibold">No recordings returned yet.</span>{' '}
+            Make sure call recording is enabled inside IVR flow #{status?.flow_app_id || '1386346'}.
           </div>
         </div>
       )}
@@ -195,7 +222,7 @@ export const ExotelCallLogsScreen: React.FC<ExotelCallLogsScreenProps> = ({
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search number, status, SID..."
-                className="w-full pl-9 pr-3 py-1.5 text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-600/20 focus:border-teal-600"
+                className="w-full pl-9 pr-3 py-1.5 text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-700"
               />
             </div>
           </div>
@@ -228,12 +255,12 @@ export const ExotelCallLogsScreen: React.FC<ExotelCallLogsScreenProps> = ({
             <div className="inline-flex items-center justify-center w-10 h-10 rounded-full bg-red-50 text-red-600 mb-3">
               <AlertCircle className="w-5 h-5" />
             </div>
-            <h3 className="text-sm font-semibold text-slate-900">Unable to load Exotel call logs</h3>
+            <h3 className="text-sm font-semibold text-slate-900">Unable to load call logs</h3>
             <p className="text-xs text-slate-600 mt-1 max-w-md mx-auto">{error}</p>
             <button
               type="button"
               onClick={onRefresh}
-              className="mt-4 px-4 py-2 text-xs font-medium text-white bg-teal-700 hover:bg-teal-800 rounded-lg transition-colors"
+              className="mt-4 px-4 py-2 text-xs font-medium text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors"
             >
               Retry Sync
             </button>
@@ -262,7 +289,7 @@ export const ExotelCallLogsScreen: React.FC<ExotelCallLogsScreenProps> = ({
               <Phone className="w-4 h-4" />
             </div>
             <h3 className="text-sm font-semibold text-slate-900">
-              {calls.length === 0 ? 'No Exotel calls yet' : 'No matching calls found'}
+              {calls.length === 0 ? 'No calls yet' : 'No matching calls found'}
             </h3>
             <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
               {calls.length === 0
@@ -274,7 +301,7 @@ export const ExotelCallLogsScreen: React.FC<ExotelCallLogsScreenProps> = ({
                 <button
                   type="button"
                   onClick={onOpenDialer}
-                  className="px-4 py-2 text-xs font-medium text-white bg-teal-700 hover:bg-teal-800 rounded-lg transition-colors"
+                  className="px-4 py-2 text-xs font-medium text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors"
                 >
                   Open Telephone
                 </button>
@@ -317,7 +344,7 @@ export const ExotelCallLogsScreen: React.FC<ExotelCallLogsScreenProps> = ({
                     <tr
                       key={call.sid}
                       className={`transition-colors ${
-                        isPlaying ? 'bg-teal-50/50' : 'hover:bg-slate-50/80'
+                        isPlaying ? 'bg-blue-50/50' : 'hover:bg-slate-50/80'
                       }`}
                     >
                       <td className="py-3 pl-5 pr-3 text-xs font-mono tabular-nums text-slate-600 whitespace-nowrap">
@@ -326,7 +353,7 @@ export const ExotelCallLogsScreen: React.FC<ExotelCallLogsScreenProps> = ({
                       <td className="py-3 px-3 text-xs text-slate-700 whitespace-nowrap">
                         <span className="inline-flex items-center gap-1.5">
                           {dir === 'Inbound' ? (
-                            <ArrowDownLeft className="w-3.5 h-3.5 text-teal-600" />
+                            <ArrowDownLeft className="w-3.5 h-3.5 text-blue-600" />
                           ) : (
                             <ArrowUpRight className="w-3.5 h-3.5 text-slate-500" />
                           )}
@@ -353,8 +380,8 @@ export const ExotelCallLogsScreen: React.FC<ExotelCallLogsScreenProps> = ({
                               onClick={() => onPlayRecording(call)}
                               className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
                                 isPlaying
-                                  ? 'bg-teal-700 text-white'
-                                  : 'bg-teal-50 text-teal-800 hover:bg-teal-100'
+                                  ? 'bg-blue-700 text-white'
+                                  : 'bg-blue-50 text-blue-700 hover:bg-blue-100'
                               }`}
                             >
                               {isPlaying ? (
@@ -364,15 +391,15 @@ export const ExotelCallLogsScreen: React.FC<ExotelCallLogsScreenProps> = ({
                               )}
                               {isPlaying ? 'Playing' : 'Listen'}
                             </button>
-                            <a
-                              href={`${call.audioProxyUrl}?download=1`}
-                              download={`exotel_call_${call.sid}.mp3`}
+                            <button
+                              type="button"
+                              onClick={() => handleDownloadRecording(call)}
                               aria-label={`Download recording for ${call.from}`}
                               title="Download MP3"
                               className="p-1.5 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-md transition-colors"
                             >
                               <Download className="w-3.5 h-3.5" />
-                            </a>
+                            </button>
                           </div>
                         ) : (
                           <span className="text-xs text-slate-400">No audio</span>
