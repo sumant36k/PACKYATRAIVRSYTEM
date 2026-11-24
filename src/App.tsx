@@ -1,295 +1,269 @@
-/**
- * @license
- * SPDX-License-Identifier: Apache-2.0
- */
-
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { ListOrdered, Menu, Phone, RefreshCw, X } from 'lucide-react';
+import { AudioPlayerBar } from './components/AudioPlayerBar';
+import { ExotelCallLogsScreen } from './components/ExotelCallLogsScreen';
+import { ExotelTelephoneScreen } from './components/ExotelTelephoneScreen';
 import {
-  INITIAL_CALL_FLOWS,
-  INITIAL_SIP_TRUNKS,
-  INITIAL_DIDS,
-  INITIAL_AUDIO_PROMPTS,
-  INITIAL_ACTIVE_CALLS,
-  INITIAL_QUEUES,
-  INITIAL_CDRS,
-} from './data/initialData';
-import { CallFlow, SipTrunk, DIDNumber, AudioPrompt, ActiveCall, QueueMetrics, CallDetailRecord } from './types/ivr';
-import { FlowBuilder } from './components/flow/FlowBuilder';
-import { SipTrunkManager } from './components/telephony/SipTrunkManager';
-import { AudioPromptStudio } from './components/audio/AudioPromptStudio';
-import { LiveCallMonitor } from './components/monitor/LiveCallMonitor';
-import { CodeExportCenter } from './components/code/CodeExportCenter';
-import { SoftphoneModal } from './components/softphone/SoftphoneModal';
-import { LiveCarrierDispatcherModal } from './components/telephony/LiveCarrierDispatcherModal';
-import {
-  PhoneCall,
-  GitFork,
-  Radio,
-  Sparkles,
-  Activity,
-  Code2,
-  Play,
-  ArrowRight,
-  ShieldCheck,
-  Server,
-  Layers,
-} from 'lucide-react';
+  DEFAULT_IVR_ROUTES,
+  ExotelCallRecord,
+  ExotelStatus,
+  IvrRouteEntry,
+} from './types/exotel';
 
-type ActiveTab = 'flow' | 'trunks' | 'audio' | 'monitor' | 'code';
+type ActiveScreen = 'telephone' | 'logs';
+
+const ROUTES_STORAGE_KEY = 'packyatra_exotel_ivr_routes_v1';
+
+function loadSavedRoutes(): IvrRouteEntry[] {
+  try {
+    const raw = localStorage.getItem(ROUTES_STORAGE_KEY);
+    if (!raw) return DEFAULT_IVR_ROUTES;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+  } catch {
+    // Ignore storage parse error
+  }
+  return DEFAULT_IVR_ROUTES;
+}
 
 export default function App() {
-  const [flows, setFlows] = useState<CallFlow[]>(INITIAL_CALL_FLOWS);
-  const [selectedFlowId, setSelectedFlowId] = useState<string>(INITIAL_CALL_FLOWS[0].id);
-  const [trunks, setTrunks] = useState<SipTrunk[]>(INITIAL_SIP_TRUNKS);
-  const [dids, setDids] = useState<DIDNumber[]>(INITIAL_DIDS);
-  const [prompts, setPrompts] = useState<AudioPrompt[]>(INITIAL_AUDIO_PROMPTS);
-  const [activeCalls, setActiveCalls] = useState<ActiveCall[]>(INITIAL_ACTIVE_CALLS);
-  const [queues, setQueues] = useState<QueueMetrics[]>(INITIAL_QUEUES);
-  const [cdrs, setCdrs] = useState<CallDetailRecord[]>(INITIAL_CDRS);
+  const [activeScreen, setActiveScreen] = useState<ActiveScreen>('telephone');
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const [activeTab, setActiveTab] = useState<ActiveTab>('flow');
-  const [isSoftphoneOpen, setIsSoftphoneOpen] = useState<boolean>(false);
-  const [isCarrierDispatcherOpen, setIsCarrierDispatcherOpen] = useState<boolean>(false);
-  const [carrierTargetNumber, setCarrierTargetNumber] = useState<string>('+91 9916109192');
-  const [softphoneDialNumber, setSoftphoneDialNumber] = useState<string>('');
-  const [softphoneCallerId, setSoftphoneCallerId] = useState<string>('+91 9916109192');
-  const [softphoneRedirectTo, setSoftphoneRedirectTo] = useState<string>('+91 9916109192');
-  const [traversedNodeId, setTraversedNodeId] = useState<string | null>(null);
+  const [status, setStatus] = useState<ExotelStatus | null>(null);
+  const [calls, setCalls] = useState<ExotelCallRecord[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [playingCall, setPlayingCall] = useState<ExotelCallRecord | null>(null);
+  const [routes, setRoutes] = useState<IvrRouteEntry[]>(loadSavedRoutes);
 
-  const currentFlow = flows.find((f) => f.id === selectedFlowId) || flows[0];
+  const fetchExotelData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const statusRes = await fetch('/api/exotel/status');
+      const statusData = (await statusRes.json().catch(() => null)) as ExotelStatus | null;
+      setStatus(statusData);
 
-  const handleUpdateFlow = (updated: CallFlow) => {
-    setFlows((prev) => prev.map((f) => (f.id === updated.id ? updated : f)));
-  };
+      if (!statusData?.exotel_ready) {
+        setCalls([]);
+        setError(
+          statusData?.invalid_account_sid
+            ? 'EXOTEL_ACCOUNT_SID contains spaces. Set it to your Exotel Account SID (e.g. packyatra1).'
+            : 'Add EXOTEL_ACCOUNT_SID, EXOTEL_API_KEY, and EXOTEL_API_TOKEN to your environment to load live Exotel calls.'
+        );
+        return;
+      }
 
-  const handleLaunchSoftphone = (
-    numberOrFlowId?: string,
-    options?: { callerId?: string; redirectTo?: string }
-  ) => {
-    if (numberOrFlowId && numberOrFlowId.startsWith('+')) {
-      setSoftphoneDialNumber(numberOrFlowId);
-    } else if (numberOrFlowId && numberOrFlowId.startsWith('flow-')) {
-      setSelectedFlowId(numberOrFlowId);
-      const match = dids.find((d) => d.assignedFlowId === numberOrFlowId);
-      if (match) setSoftphoneDialNumber(match.number);
+      const callsRes = await fetch('/api/exotel/calls');
+      const callsData = await callsRes.json().catch(() => ({}));
+      if (!callsRes.ok) {
+        setError(callsData?.detail || `Exotel API error (HTTP ${callsRes.status})`);
+      } else {
+        setCalls(Array.isArray(callsData?.calls) ? callsData.calls : []);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to reach Exotel server.');
+    } finally {
+      setLoading(false);
     }
-    if (options?.callerId) setSoftphoneCallerId(options.callerId);
-    if (options?.redirectTo) setSoftphoneRedirectTo(options.redirectTo);
-    setIsSoftphoneOpen(true);
+  }, []);
+
+  useEffect(() => {
+    fetchExotelData();
+  }, [fetchExotelData]);
+
+  const handleUpdateRoutes = (next: IvrRouteEntry[]) => {
+    setRoutes(next);
+    try {
+      localStorage.setItem(ROUTES_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // Ignore storage quota error
+    }
   };
 
-  const handleTerminateCall = (channelId: string) => {
-    setActiveCalls((prev) => prev.filter((c) => c.channelId !== channelId));
-  };
+  const navItems: Array<{ id: ActiveScreen; label: string; icon: React.ReactNode }> = [
+    {
+      id: 'telephone',
+      label: 'Telephone & IVR',
+      icon: <Phone className="w-4 h-4 shrink-0" />,
+    },
+    {
+      id: 'logs',
+      label: 'Call Logs & Audio',
+      icon: <ListOrdered className="w-4 h-4 shrink-0" />,
+    },
+  ];
+
+  const pageTitle = activeScreen === 'telephone' ? 'Telephone & IVR' : 'Call Logs & Audio';
 
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-950 text-slate-100 font-sans">
-      {/* Top Bar Contract: Zone 1 (Wordmark) — Zone 2 (4-5 single-line Nav links) — Zone 3 (Primary Action) */}
-      <header className="h-14 px-6 border-b border-slate-800 bg-slate-950 flex items-center justify-between gap-8 shrink-0 z-30 select-none">
-        {/* Zone 1: Single text element wordmark */}
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-cyan-600 to-blue-600 flex items-center justify-center text-slate-950 font-bold shadow-md shadow-cyan-500/20">
-            <Radio className="w-4 h-4 text-slate-950" />
-          </div>
-          <span className="text-sm font-bold tracking-tight text-white whitespace-nowrap shrink-0">
-            Asterisk + FastAPI IVR Studio
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex">
+      {/* Desktop Left Sidebar */}
+      <aside className="hidden md:flex md:flex-col w-60 bg-white border-r border-slate-200 shrink-0">
+        <div className="h-15 px-5 border-b border-slate-200 flex items-center">
+          <span className="text-base font-bold tracking-tight text-slate-900 whitespace-nowrap shrink-0">
+            Packyatra Voice
           </span>
         </div>
 
-        {/* Zone 2: 4-5 single-line nav links */}
-        <nav className="hidden md:flex items-center gap-1 text-xs font-medium text-slate-400">
-          <button
-            onClick={() => setActiveTab('flow')}
-            className={`px-3 py-1.5 rounded-md transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
-              activeTab === 'flow'
-                ? 'bg-slate-900 text-cyan-400 border border-slate-800 shadow-sm'
-                : 'hover:text-slate-200'
-            }`}
-          >
-            <GitFork className="w-3.5 h-3.5" />
-            <span>Call Flow Builder</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('trunks')}
-            className={`px-3 py-1.5 rounded-md transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
-              activeTab === 'trunks'
-                ? 'bg-slate-900 text-cyan-400 border border-slate-800 shadow-sm'
-                : 'hover:text-slate-200'
-            }`}
-          >
-            <Server className="w-3.5 h-3.5" />
-            <span>SIP Trunks & DIDs</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('audio')}
-            className={`px-3 py-1.5 rounded-md transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
-              activeTab === 'audio'
-                ? 'bg-slate-900 text-cyan-400 border border-slate-800 shadow-sm'
-                : 'hover:text-slate-200'
-            }`}
-          >
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Dynamic Voice & TTS</span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('monitor')}
-            className={`px-3 py-1.5 rounded-md transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
-              activeTab === 'monitor'
-                ? 'bg-slate-900 text-cyan-400 border border-slate-800 shadow-sm'
-                : 'hover:text-slate-200'
-            }`}
-          >
-            <Activity className="w-3.5 h-3.5" />
-            <span>Live Call Monitor</span>
-            {activeCalls.length > 0 && (
-              <span className="w-2 h-2 rounded-full bg-emerald-400" />
-            )}
-          </button>
-
-          <button
-            onClick={() => setActiveTab('code')}
-            className={`px-3 py-1.5 rounded-md transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 ${
-              activeTab === 'code'
-                ? 'bg-slate-900 text-cyan-400 border border-slate-800 shadow-sm'
-                : 'hover:text-slate-200'
-            }`}
-          >
-            <Code2 className="w-3.5 h-3.5" />
-            <span>FastAPI & ARI Code</span>
-          </button>
+        <nav className="flex-1 p-3 flex flex-col gap-1" aria-label="Main navigation">
+          {navItems.map((item) => {
+            const active = activeScreen === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setActiveScreen(item.id)}
+                className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${
+                  active
+                    ? 'bg-teal-50 text-teal-800'
+                    : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                }`}
+              >
+                {item.icon}
+                <span>{item.label}</span>
+              </button>
+            );
+          })}
         </nav>
 
-        {/* Zone 3: 1 Primary Action */}
-        <div className="flex items-center gap-3 shrink-0">
-          <button
-            onClick={() => handleLaunchSoftphone()}
-            className="flex items-center gap-2 bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 text-xs font-bold px-3.5 py-1.5 rounded-lg shadow-md shadow-emerald-500/20 transition-all whitespace-nowrap shrink-0"
-          >
-            <Play className="w-3.5 h-3.5 fill-current" />
-            <span>Launch Softphone</span>
-          </button>
+        <div className="p-4 border-t border-slate-200 text-xs text-slate-500 space-y-1">
+          <div className="font-medium text-slate-800">Exotel Line</div>
+          <div className="font-mono tabular-nums text-slate-700">
+            {status?.caller_id || '08047291107'}
+          </div>
+          <div className="flex items-center gap-1.5 text-slate-500">
+            <span>{status?.exotel_ready ? 'Connected' : 'Not configured'}</span>
+            {status?.account_sid_masked && (
+              <>
+                <span aria-hidden="true">·</span>
+                <span className="font-mono">{status.account_sid_masked}</span>
+              </>
+            )}
+          </div>
         </div>
-      </header>
+      </aside>
 
-      {/* Mobile Sub-Navigation Bar */}
-      <div className="md:hidden flex items-center justify-between overflow-x-auto px-4 py-2 border-b border-slate-800 bg-slate-950 shrink-0 gap-2 text-xs">
-        <button
-          onClick={() => setActiveTab('flow')}
-          className={`px-2.5 py-1 rounded whitespace-nowrap ${
-            activeTab === 'flow' ? 'bg-cyan-950 text-cyan-400 font-semibold' : 'text-slate-400'
-          }`}
-        >
-          Flow Builder
-        </button>
-        <button
-          onClick={() => setActiveTab('trunks')}
-          className={`px-2.5 py-1 rounded whitespace-nowrap ${
-            activeTab === 'trunks' ? 'bg-cyan-950 text-cyan-400 font-semibold' : 'text-slate-400'
-          }`}
-        >
-          SIP & DIDs
-        </button>
-        <button
-          onClick={() => setActiveTab('audio')}
-          className={`px-2.5 py-1 rounded whitespace-nowrap ${
-            activeTab === 'audio' ? 'bg-cyan-950 text-cyan-400 font-semibold' : 'text-slate-400'
-          }`}
-        >
-          Dynamic TTS
-        </button>
-        <button
-          onClick={() => setActiveTab('monitor')}
-          className={`px-2.5 py-1 rounded whitespace-nowrap ${
-            activeTab === 'monitor' ? 'bg-cyan-950 text-cyan-400 font-semibold' : 'text-slate-400'
-          }`}
-        >
-          Live Calls
-        </button>
-        <button
-          onClick={() => setActiveTab('code')}
-          className={`px-2.5 py-1 rounded whitespace-nowrap ${
-            activeTab === 'code' ? 'bg-cyan-950 text-cyan-400 font-semibold' : 'text-slate-400'
-          }`}
-        >
-          FastAPI Code
-        </button>
+      {/* Mobile Navigation Drawer */}
+      {mobileMenuOpen && (
+        <div className="fixed inset-0 z-40 md:hidden flex">
+          <div
+            className="fixed inset-0 bg-slate-900/40"
+            onClick={() => setMobileMenuOpen(false)}
+            aria-hidden="true"
+          />
+          <aside className="relative w-64 max-w-[80vw] bg-white h-full flex flex-col border-r border-slate-200 z-50">
+            <div className="h-14 px-4 border-b border-slate-200 flex items-center justify-between">
+              <span className="text-base font-bold tracking-tight text-slate-900">
+                Packyatra Voice
+              </span>
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen(false)}
+                aria-label="Close navigation menu"
+                className="p-2 text-slate-500 hover:text-slate-900 rounded-lg"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <nav className="flex-1 p-3 flex flex-col gap-1">
+              {navItems.map((item) => {
+                const active = activeScreen === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => {
+                      setActiveScreen(item.id);
+                      setMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center gap-3 px-3.5 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                      active
+                        ? 'bg-teal-50 text-teal-800'
+                        : 'text-slate-600 hover:bg-slate-100 hover:text-slate-900'
+                    }`}
+                  >
+                    {item.icon}
+                    <span>{item.label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+            <div className="p-4 border-t border-slate-200 text-xs text-slate-500 space-y-1">
+              <div className="font-medium text-slate-800">Exotel Line</div>
+              <div className="font-mono tabular-nums text-slate-700">
+                {status?.caller_id || '08047291107'}
+              </div>
+              <div>{status?.exotel_ready ? 'Connected' : 'Not configured'}</div>
+            </div>
+          </aside>
+        </div>
+      )}
+
+      {/* Main Content Area */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* Top Bar Contract: Breadcrumb on Left, Single Action on Right */}
+        <header className="h-15 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between gap-4 sticky top-0 z-20">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen(true)}
+              aria-label="Open navigation menu"
+              className="md:hidden p-2 -ml-1 text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded-lg"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div className="flex items-center gap-2 text-sm min-w-0">
+              <span className="text-slate-500 hidden sm:inline whitespace-nowrap">
+                Packyatra Voice
+              </span>
+              <span className="text-slate-300 hidden sm:inline" aria-hidden="true">
+                /
+              </span>
+              <h1 className="font-semibold text-slate-900 truncate">{pageTitle}</h1>
+            </div>
+          </div>
+
+          <button
+            type="button"
+            onClick={fetchExotelData}
+            disabled={loading}
+            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-white bg-slate-900 hover:bg-slate-800 disabled:opacity-50 rounded-lg transition-colors whitespace-nowrap shrink-0"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            Sync Exotel
+          </button>
+        </header>
+
+        {/* Viewport Container */}
+        <main className="flex-1 w-full max-w-[1280px] mx-auto px-4 sm:px-6 py-6 flex flex-col gap-6">
+          <AudioPlayerBar call={playingCall} onClose={() => setPlayingCall(null)} />
+
+          {activeScreen === 'telephone' ? (
+            <ExotelTelephoneScreen
+              status={status}
+              calls={calls}
+              routes={routes}
+              onUpdateRoutes={handleUpdateRoutes}
+              onCallPlaced={fetchExotelData}
+              onPlayRecording={(call) => setPlayingCall(call)}
+              onOpenLogs={() => setActiveScreen('logs')}
+            />
+          ) : (
+            <ExotelCallLogsScreen
+              status={status}
+              calls={calls}
+              loading={loading}
+              error={error}
+              playingCallSid={playingCall?.sid || null}
+              onRefresh={fetchExotelData}
+              onPlayRecording={(call) => setPlayingCall(call)}
+              onOpenDialer={() => setActiveScreen('telephone')}
+            />
+          )}
+        </main>
       </div>
-
-      {/* Main Viewport Content */}
-      <main className="flex-1 flex overflow-hidden relative">
-        {activeTab === 'flow' && (
-          <FlowBuilder
-            flow={currentFlow}
-            allFlows={flows}
-            onSelectFlow={setSelectedFlowId}
-            onUpdateFlow={handleUpdateFlow}
-            activeNodeId={traversedNodeId}
-            onLaunchSimulator={handleLaunchSoftphone}
-          />
-        )}
-
-        {activeTab === 'trunks' && (
-          <SipTrunkManager
-            trunks={trunks}
-            dids={dids}
-            flows={flows}
-            onUpdateTrunks={setTrunks}
-            onUpdateDids={setDids}
-            onLaunchSoftphoneWithNumber={handleLaunchSoftphone}
-            onOpenLiveCarrierDispatcher={(num) => {
-              setCarrierTargetNumber(num);
-              setIsCarrierDispatcherOpen(true);
-            }}
-          />
-        )}
-
-        {activeTab === 'audio' && (
-          <AudioPromptStudio prompts={prompts} onUpdatePrompts={setPrompts} />
-        )}
-
-        {activeTab === 'monitor' && (
-          <LiveCallMonitor
-            activeCalls={activeCalls}
-            queues={queues}
-            cdrs={cdrs}
-            onTerminateCall={handleTerminateCall}
-          />
-        )}
-
-        {activeTab === 'code' && <CodeExportCenter currentFlow={currentFlow} />}
-      </main>
-
-      {/* Interactive Softphone Modal */}
-      {isSoftphoneOpen && (
-        <SoftphoneModal
-          flows={flows}
-          dids={dids}
-          currentFlowId={selectedFlowId}
-          initialDialNumber={softphoneDialNumber}
-          initialCallerId={softphoneCallerId}
-          initialRedirectTo={softphoneRedirectTo}
-          onNodeTraversed={(nodeId) => setTraversedNodeId(nodeId)}
-          onOpenLiveCarrierDispatcher={(num) => {
-            setCarrierTargetNumber(num);
-            setIsCarrierDispatcherOpen(true);
-          }}
-          onClose={() => {
-            setIsSoftphoneOpen(false);
-            setTraversedNodeId(null);
-          }}
-        />
-      )}
-
-      {/* Live Carrier PSTN Dispatcher Modal */}
-      {isCarrierDispatcherOpen && (
-        <LiveCarrierDispatcherModal
-          userPhoneNumber={carrierTargetNumber}
-          onClose={() => setIsCarrierDispatcherOpen(false)}
-        />
-      )}
     </div>
   );
 }
