@@ -63,7 +63,7 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
 }) => {
   const [dialMode, setDialMode] = useState<'bridge' | 'ivr'>('bridge');
   const [agentPhone, setAgentPhone] = useState(routes[0]?.phone || '+919916109192');
-  const [targetNumber, setTargetNumber] = useState(routes[1]?.phone || '+919199225154');
+  const [targetNumber, setTargetNumber] = useState('');
   const [flowAppId, setFlowAppId] = useState(status?.flow_app_id || '1386346');
 
   useEffect(() => {
@@ -320,8 +320,8 @@ export const ExotelTelephoneScreen: React.FC<ExotelTelephoneScreenProps> = ({
               type="tel"
               value={targetNumber}
               onChange={(e) => setTargetNumber(e.target.value)}
-              placeholder="+91 91992 25154"
-              className="w-full pl-4 pr-11 py-3 text-xl font-semibold font-mono tabular-nums tracking-tight text-slate-900 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-700"
+              placeholder="Enter phone number"
+              className="w-full pl-4 pr-11 py-3 text-xl font-semibold font-mono tabular-nums tracking-tight text-slate-900 placeholder:text-sm placeholder:font-sans placeholder:font-normal placeholder:tracking-normal placeholder:text-slate-400 bg-slate-50 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-600/20 focus:border-blue-700"
             />
             <button
               type="button"

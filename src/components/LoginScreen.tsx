@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { AlertCircle, Eye, EyeOff, Lock, LogIn, Phone, User } from 'lucide-react';
 import { AuthUser, extractRoleDeep, resolveAppRole } from '../types/exotel';
 
@@ -7,8 +7,9 @@ interface LoginScreenProps {
   onLoginSuccess: (token: string, user: AuthUser) => void;
 }
 
-function getAuthEndpointUrl(): { baseUrl: string; loginUrl: string } {
+function getAuthEndpointUrl(overrideBase?: string): { baseUrl: string; loginUrl: string } {
   const raw =
+    overrideBase ||
     (import.meta.env.VITE_APP_API_URL as string | undefined) ||
     'https://packyatra.in/api';
   const cleaned = raw
@@ -120,8 +121,24 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [runtimeAuthApiUrl, setRuntimeAuthApiUrl] = useState<string>('');
 
-  const { loginUrl } = getAuthEndpointUrl();
+  useEffect(() => {
+    let active = true;
+    fetch('/api/auth/config')
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (active && data && typeof data.authApiUrl === 'string' && data.authApiUrl.trim()) {
+          setRuntimeAuthApiUrl(data.authApiUrl.trim());
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const { loginUrl } = getAuthEndpointUrl(runtimeAuthApiUrl || undefined);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

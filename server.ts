@@ -1,20 +1,59 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import crypto from 'crypto';
 import express, { type NextFunction, type Request, type Response } from 'express';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { createServer as createViteServer } from 'vite';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function loadEnvFiles(): void {
+  const isProdEnv = process.env.NODE_ENV === 'production';
+  const candidateFiles = isProdEnv
+    ? ['.env.production.local', '.env.local', '.env.production', '.env']
+    : ['.env.local', '.env.development.local', '.env.development', '.env'];
+  const candidateDirs = Array.from(new Set([__dirname, process.cwd()]));
+
+  for (const dir of candidateDirs) {
+    for (const fileName of candidateFiles) {
+      const filePath = path.join(dir, fileName);
+      if (!fs.existsSync(filePath)) continue;
+      try {
+        const parsed = dotenv.parse(fs.readFileSync(filePath, 'utf8'));
+        for (const [key, value] of Object.entries(parsed)) {
+          const existing = process.env[key];
+          if (existing === undefined || existing.trim() === '') {
+            process.env[key] = value;
+          }
+        }
+      } catch (err) {
+        console.warn(`Warning: failed to parse env file ${filePath}:`, err);
+      }
+    }
+  }
+}
+
+loadEnvFiles();
+
 const PORT = Number(process.env.PORT) || 3000;
 
 function getEnv(name: string, fallback = ''): string {
-  return (process.env[name] || fallback).trim();
+  const raw = (process.env[name] ?? '').trim().replace(/^['"]+|['"]+$/g, '').trim();
+  if (raw) return raw;
+  return fallback.trim().replace(/^['"]+|['"]+$/g, '').trim();
 }
 
-const SESSION_SECRET = getEnv('SESSION_SECRET') || crypto.randomBytes(32).toString('hex');
+const SESSION_SECRET =
+  getEnv('SESSION_SECRET') ||
+  (getEnv('EXOTEL_API_TOKEN')
+    ? crypto
+        .createHash('sha256')
+        .update(
+          `${getEnv('EXOTEL_ACCOUNT_SID')}:${getEnv('EXOTEL_API_KEY')}:${getEnv('EXOTEL_API_TOKEN')}`
+        )
+        .digest('hex')
+    : crypto.randomBytes(32).toString('hex'));
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const revokedTokenIds = new Map<string, number>();
 
@@ -442,7 +481,10 @@ async function exotelFetch(
   apiPath: string,
   init: RequestInit = {}
 ): Promise<{ response: globalThis.Response; data: Record<string, any>; usedSubdomain: string }> {
-  const explicitSubdomain = getEnv('EXOTEL_SUBDOMAIN');
+  const explicitSubdomain = getEnv('EXOTEL_SUBDOMAIN')
+    .replace(/^https?:\/\//i, '')
+    .split('/')[0]
+    .trim();
   const candidates = explicitSubdomain
     ? [explicitSubdomain]
     : ['api.in.exotel.com', 'api.exotel.com'];
@@ -475,6 +517,7 @@ async function exotelFetch(
 
 async function startServer() {
   const app = express();
+  app.set('trust proxy', 1);
 
   app.use(express.json());
   app.use(express.urlencoded({ extended: false }));
@@ -491,7 +534,24 @@ async function startServer() {
   }> = [];
 
   app.get('/api/health', (_req, res) => {
-    res.json({ status: 'healthy', service: 'exotel-voice-console' });
+    const hasExotel = Boolean(
+      getEnv('EXOTEL_ACCOUNT_SID') && getEnv('EXOTEL_API_KEY') && getEnv('EXOTEL_API_TOKEN')
+    );
+    res.json({
+      status: 'healthy',
+      service: 'exotel-voice-console',
+      exotelConfigured: hasExotel,
+    });
+  });
+
+  app.get('/api/auth/config', (_req, res) => {
+    let authApiUrl = 'https://packyatra.in/api';
+    try {
+      authApiUrl = getValidatedAuthApiBase();
+    } catch {
+      authApiUrl = 'https://packyatra.in/api';
+    }
+    res.json({ authApiUrl });
   });
 
   app.post('/api/auth/login', async (req, res) => {
@@ -1518,22 +1578,37 @@ async function startServer() {
     res.json({ ok: true });
   });
 
-  if (process.env.NODE_ENV !== 'production') {
+  app.use('/api/*', (_req, res) => {
+    res.status(404).json({ detail: 'API endpoint not found.' });
+  });
+
+  const distPath = path.join(__dirname, 'dist');
+  const distIndexPath = path.join(distPath, 'index.html');
+  const runningViaTsx = process.execArgv.some((arg) => arg.includes('tsx'));
+  const isProduction =
+    process.env.NODE_ENV === 'production' ||
+    (!runningViaTsx && process.env.npm_lifecycle_event !== 'dev' && fs.existsSync(distIndexPath));
+
+  if (!isProduction) {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distPath = path.join(__dirname, 'dist');
     app.use(express.static(distPath));
     app.get('*', (_req, res) => {
-      res.sendFile(path.join(distPath, 'index.html'));
+      if (!fs.existsSync(distIndexPath)) {
+        res.status(503).send('Production build not found. Run "npm run build" before starting.');
+        return;
+      }
+      res.sendFile(distIndexPath);
     });
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Packyatra Exotel Console running on http://0.0.0.0:${PORT}`);
+    console.log(`Packyatra Exotel Console running on http://0.0.0.0:${PORT} (${isProduction ? 'production' : 'development'})`);
   });
 }
 
