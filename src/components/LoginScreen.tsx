@@ -80,6 +80,10 @@ function extractTokenDeep(body: unknown, headerAuth: string): string {
     'jwt_token',
     'authtoken',
     'auth_token',
+    'bearertoken',
+    'bearer_token',
+    'usertoken',
+    'user_token',
     'tokenstring',
     'sessiontoken',
     'idtoken',
@@ -88,6 +92,7 @@ function extractTokenDeep(body: unknown, headerAuth: string): string {
 
   const queue: unknown[] = [body];
   const visited = new Set<object>();
+  let fallbackJwt = '';
   while (queue.length > 0) {
     const current = queue.shift();
     if (!current || typeof current !== 'object' || Array.isArray(current)) continue;
@@ -95,13 +100,26 @@ function extractTokenDeep(body: unknown, headerAuth: string): string {
     visited.add(current);
 
     for (const [k, v] of Object.entries(current as Record<string, unknown>)) {
-      if (typeof v === 'string' && tokenKeys.has(k.toLowerCase()) && v.trim()) {
-        return v.trim();
+      if (typeof v === 'string') {
+        const trimmed = v.trim();
+        if (tokenKeys.has(k.toLowerCase()) && trimmed) {
+          return trimmed;
+        }
+        if (
+          !fallbackJwt &&
+          /^eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}$/.test(trimmed)
+        ) {
+          fallbackJwt = trimmed;
+        }
       }
       if (v && typeof v === 'object') {
         queue.push(v);
       }
     }
+  }
+
+  if (fallbackJwt) {
+    return fallbackJwt;
   }
 
   if (/^Bearer\s+(.+)$/i.test(headerAuth)) {
@@ -287,6 +305,17 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           return;
         }
 
+        if (
+          serverLoginRes.status === 404 &&
+          typeof serverLoginData === 'string' &&
+          /^\s*</.test(serverLoginData)
+        ) {
+          setError(
+            'App backend endpoint (/api/auth/login) returned HTTP 404. Ensure the production deployment runs the Node server (npm start / node server.ts) rather than static-only hosting.'
+          );
+          return;
+        }
+
         setError(
           extractErrorMessage(serverLoginData, serverLoginRes.status, false)
         );
@@ -310,6 +339,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
           : {};
 
       if (!proxyRes.ok || !proxyObj?.token) {
+        if (
+          proxyRes.status === 404 &&
+          typeof proxyData === 'string' &&
+          /^\s*</.test(proxyData)
+        ) {
+          setError(
+            'App backend endpoint (/api/auth/login) returned HTTP 404. Ensure the production deployment runs the Node server (npm start / node server.ts) rather than static-only hosting.'
+          );
+          return;
+        }
         setError(extractErrorMessage(proxyData, proxyRes.status, false));
         return;
       }
